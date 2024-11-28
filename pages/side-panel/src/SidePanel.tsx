@@ -2,25 +2,65 @@ import '@src/SidePanel.css';
 import { useStorage, withErrorBoundary, withSuspense } from '@extension/shared';
 import { exampleThemeStorage } from '@extension/storage';
 import type { ComponentPropsWithoutRef } from 'react';
+import { useState } from 'react';
+import { getH1Title } from './tools/getH1Title';
+
+// Set default theme to dark
+exampleThemeStorage.set('dark');
 
 const SidePanel = () => {
   const theme = useStorage(exampleThemeStorage);
   const isLight = theme === 'light';
-  const logo = isLight ? 'side-panel/logo_vertical.svg' : 'side-panel/logo_vertical_dark.svg';
-  const goGithubSite = () =>
-    chrome.tabs.create({ url: 'https://github.com/Jonghakseo/chrome-extension-boilerplate-react-vite' });
+  const [titles, setTitles] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleGetH1Titles = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const h1Titles = await getH1Title();
+      setTitles(h1Titles);
+      if (h1Titles.length === 0) {
+        setError('No H1 titles found on this page');
+      }
+    } catch (err) {
+      setError('Failed to get H1 titles');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className={`App ${isLight ? 'bg-slate-50' : 'bg-gray-800'}`}>
-      <header className={`App-header ${isLight ? 'text-gray-900' : 'text-gray-100'}`}>
-        <button onClick={goGithubSite}>
-          <img src={chrome.runtime.getURL(logo)} className="App-logo" alt="logo" />
-        </button>
-        <p>
-          Edit <code>pages/side-panel/src/SidePanel.tsx</code>
-        </p>
+      <div className="absolute right-4 top-4">
         <ToggleButton>Toggle theme</ToggleButton>
-      </header>
+      </div>
+
+      <div className="flex min-h-screen flex-col items-center justify-center p-4">
+        <button
+          onClick={handleGetH1Titles}
+          disabled={isLoading}
+          className={`mb-4 rounded px-6 py-2 font-bold shadow hover:scale-105 ${
+            isLight ? 'bg-blue-500 text-white' : 'bg-blue-400 text-white'
+          } ${isLoading ? 'cursor-not-allowed opacity-50' : ''}`}>
+          {isLoading ? 'Loading...' : 'Get H1 Titles'}
+        </button>
+
+        {error && <div className={`mt-4 text-red-500`}>{error}</div>}
+
+        {titles.length > 0 && (
+          <div className={`mt-4 ${isLight ? 'text-gray-900' : 'text-gray-100'}`}>
+            <h2 className="mb-2 text-lg font-bold">Found H1 Titles:</h2>
+            <ul className="list-disc pl-5">
+              {titles.map((title, index) => (
+                <li key={index}>{title}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

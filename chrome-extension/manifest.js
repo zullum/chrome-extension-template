@@ -35,7 +35,7 @@ const manifest = deepmerge(
       type: 'module',
     },
     action: {
-      default_popup: 'popup/index.html',
+      default_title: 'Click to open the panel',
       default_icon: 'icon-34.png',
     },
     chrome_url_overrides: {

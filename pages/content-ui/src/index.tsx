@@ -2,6 +2,11 @@ import { createRoot } from 'react-dom/client';
 import App from '@src/App';
 import tailwindcssOutput from '../dist/tailwind-output.css?inline';
 
+// Listen for messages
+chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+  sendResponse('WORLD');
+});
+
 const root = document.createElement('div');
 root.id = 'chrome-extension-boilerplate-react-vite-content-view-root';
 
@@ -31,3 +36,6 @@ if (navigator.userAgent.includes('Firefox')) {
 
 shadowRoot.appendChild(rootIntoShadow);
 createRoot(rootIntoShadow).render(<App />);
+window.addEventListener('message', function (event) {
+  console.log(event.data);
+});
