@@ -1,21 +1,12 @@
 import '@src/SidePanel.css';
 import { useStorage, withErrorBoundary, withSuspense } from '@extension/shared';
 import { exampleThemeStorage } from '@extension/storage';
-import { Download, Moon, Pause, Play, Settings, Sun } from 'lucide-react';
+import { Download, Moon, Play, Settings, Sun, Square } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { captureAudio } from './tools/captureAudio';
 
 // Set default theme to dark
 exampleThemeStorage.set('dark');
-
-// Duration options in seconds
-const DURATION_OPTIONS = [
-  { label: '10 seconds', value: 10 },
-  { label: '30 seconds', value: 30 },
-  { label: '1 minute', value: 60 },
-  { label: '2 minutes', value: 120 },
-  { label: '5 minutes', value: 300 },
-];
 
 const QUALITY_PRESETS = {
   low: {
@@ -46,8 +37,6 @@ const SidePanel = () => {
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [selectedDuration, setSelectedDuration] = useState(30);
-  const [progress, setProgress] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityPreset>('high');
@@ -59,15 +48,7 @@ const SidePanel = () => {
       const startTime = Date.now();
       interval = setInterval(() => {
         const elapsed = Date.now() - startTime;
-        const newProgress = Math.min((elapsed / (selectedDuration * 1000)) * 100, 100);
-        setProgress(newProgress);
         setElapsedTime(elapsed);
-
-        if (newProgress >= 100) {
-          setIsCapturing(false);
-          setProgress(0);
-          setElapsedTime(0);
-        }
       }, 100);
     }
 
@@ -76,26 +57,39 @@ const SidePanel = () => {
         clearInterval(interval);
       }
     };
-  }, [isCapturing, selectedDuration]);
+  }, [isCapturing]);
 
   const handleCaptureAudio = async () => {
     try {
-      setIsCapturing(true);
-      setError(null);
-      setProgress(0);
-      setElapsedTime(0);
-      const url = await captureAudio(selectedDuration * 1000, QUALITY_PRESETS[selectedQuality]);
-      if (!url) {
-        setError('No audio playing found on this page');
+      if (isCapturing) {
+        await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, true);
+        setIsCapturing(false);
+        setElapsedTime(0);
         return;
       }
-      setAudioUrl(url);
+
+      setError(null);
+      setElapsedTime(0);
+      setIsCapturing(true);
+
+      const url = await captureAudio(0, QUALITY_PRESETS[selectedQuality], url => {
+        if (url) {
+          setAudioUrl(url);
+        }
+        setIsCapturing(false);
+        setElapsedTime(0);
+      });
+
+      if (url) {
+        setAudioUrl(url);
+      } else {
+        setError('No audio playing found on this page');
+        setIsCapturing(false);
+      }
     } catch (err) {
       setError('Failed to capture audio');
       console.error(err);
-    } finally {
       setIsCapturing(false);
-      setProgress(0);
       setElapsedTime(0);
     }
   };
@@ -114,7 +108,8 @@ const SidePanel = () => {
           : 'webm';
 
     const quality = selectedQuality.toUpperCase();
-    a.download = `captured-audio-${selectedDuration}s-${quality}.${extension}`;
+    const duration = Math.round(elapsedTime / 1000);
+    a.download = `captured-audio-${duration}s-${quality}.${extension}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -185,56 +180,26 @@ const SidePanel = () => {
         )}
 
         <div className="flex w-full max-w-md flex-col gap-4">
-          <select
-            value={selectedDuration}
-            onChange={e => setSelectedDuration(Number(e.target.value))}
-            disabled={isCapturing}
-            className={`rounded border px-4 py-2 ${
-              isLight
-                ? 'border-gray-300 bg-white text-gray-900'
-                : 'border-gray-600 bg-gray-700 text-gray-100'
-            }`}
-          >
-            {DURATION_OPTIONS.map(option => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-
-          <button
-            onClick={handleCaptureAudio}
-            disabled={isCapturing}
-            className={`flex items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow hover:scale-105 ${
-              isLight ? 'bg-purple-500 text-white' : 'bg-purple-400 text-white'
-            } ${isCapturing ? 'cursor-not-allowed opacity-50' : ''}`}
-          >
-            {isCapturing ? (
-              <>
-                <Pause className="size-4" />
-                Recording... {formatTime(elapsedTime)} / {formatTime(selectedDuration * 1000)}
-              </>
-            ) : (
-              <>
-                <Play className="size-4" />
-                Start Recording
-              </>
-            )}
-          </button>
-
-          {isCapturing && (
-            <div className="w-full">
-              <div className="mb-1 h-2 overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
-                <div
-                  className="h-full rounded bg-purple-500 transition-all duration-300 ease-in-out dark:bg-purple-400"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <div className="text-center text-sm text-gray-500 dark:text-gray-400">
-                {Math.round(progress)}%
-              </div>
-            </div>
-          )}
+          <div className="flex gap-2">
+            <button
+              onClick={handleCaptureAudio}
+              className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow hover:scale-105 ${
+                isLight ? 'bg-purple-500 text-white' : 'bg-purple-400 text-white'
+              }`}
+            >
+              {isCapturing ? (
+                <>
+                  <Square className="size-4" />
+                  Stop Recording ({formatTime(elapsedTime)})
+                </>
+              ) : (
+                <>
+                  <Play className="size-4" />
+                  Start Recording
+                </>
+              )}
+            </button>
+          </div>
 
           {audioUrl && (
             <button
