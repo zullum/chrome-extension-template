@@ -5,8 +5,8 @@ import { Download, Moon, Play, Settings, Sun, Square } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { captureAudio } from './tools/captureAudio';
 
-// Set default theme to dark
-exampleThemeStorage.set('dark');
+// Remove or comment out this line as it's causing the issue
+// exampleThemeStorage.set('dark');
 
 const QUALITY_PRESETS = {
   low: {
@@ -32,6 +32,13 @@ const QUALITY_PRESETS = {
 type QualityPreset = keyof typeof QUALITY_PRESETS;
 
 const SidePanel = () => {
+  useEffect(() => {
+    const currentTheme = exampleThemeStorage.get();
+    if (!currentTheme) {
+      exampleThemeStorage.set('dark');
+    }
+  }, []);
+
   const theme = useStorage(exampleThemeStorage);
   const isLight = theme === 'light';
   const [error, setError] = useState<string | null>(null);

@@ -2,13 +2,13 @@ import { StorageEnum } from '../base/enums';
 import { createStorage } from '../base/base';
 import type { BaseStorage } from '../base/types';
 
-type Theme = 'light' | 'dark';
+type Theme = 'dark' | 'light';
 
 type ThemeStorage = BaseStorage<Theme> & {
   toggle: () => Promise<void>;
 };
 
-const storage = createStorage<Theme>('theme-storage-key', 'light', {
+const storage = createStorage<Theme>('theme-storage-key', 'dark', {
   storageEnum: StorageEnum.Local,
   liveUpdate: true,
 });
