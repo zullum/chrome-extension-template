@@ -1,3 +1,4 @@
+import { recordingStore } from '../stores/recordingStore';
 import type { RecordingStatus } from '../types';
 
 // Add type declaration for messages
@@ -17,6 +18,7 @@ declare global {
     __updateRecordingStatus?: (status: RecordingStatus, message?: string) => void;
     __cleanupRecording?: () => void;
     __mediaRecorder?: MediaRecorder;
+    __audioSources?: WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>;
   }
 }
 
@@ -34,6 +36,16 @@ const DEFAULT_QUALITY: AudioQualitySettings = {
   vbrQuality: 0,
 };
 
+// Helper function to send status updates
+const sendStatusUpdate = (status: RecordingStatus, message?: string, audioUrl?: string) => {
+  chrome.runtime.sendMessage({
+    type: 'RECORDING_STATUS',
+    status,
+    message,
+    audioUrl,
+  });
+};
+
 export const captureAudio = async (
   durationMs: number,
   quality: AudioQualitySettings = DEFAULT_QUALITY,
@@ -46,6 +58,7 @@ export const captureAudio = async (
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!activeTab?.id) {
       console.error('[Extension] No active tab found');
+      sendStatusUpdate('inactive', 'No active tab found');
       return null;
     }
 
@@ -70,6 +83,7 @@ export const captureAudio = async (
       url.startsWith('about:')
     ) {
       console.error('[Extension] Cannot inject scripts into this type of page:', url);
+      sendStatusUpdate('inactive', 'Cannot record audio on this page');
       return null;
     }
 
@@ -82,7 +96,13 @@ export const captureAudio = async (
           try {
             console.log('[Page] Setting up audio recording');
 
-            // Initialize audio context
+            // Send initial status update
+            chrome.runtime.sendMessage({
+              type: 'RECORDING_STATUS',
+              status: 'waiting',
+              message: 'Waiting for audio...',
+            });
+
             if (!window.__audioContext || window.__audioContext.state === 'closed') {
               window.__audioContext = new AudioContext({
                 sampleRate: settings.sampleRate,
@@ -90,125 +110,172 @@ export const captureAudio = async (
               });
             }
 
-            // Create recording destination
+            // Store audio sources to prevent duplicate connections
+            if (!window.__audioSources) {
+              window.__audioSources = new WeakMap();
+            }
+
             window.__recordingDestination = window.__audioContext.createMediaStreamDestination();
             const audioChunks: BlobPart[] = [];
-            let isAudioDetected = false;
-            const audioSources: MediaStreamAudioSourceNode[] = [];
 
-            // Create MediaRecorder
+            // Configure MediaRecorder with proper settings
             const recorder = new MediaRecorder(window.__recordingDestination.stream, {
               mimeType: 'audio/webm;codecs=opus',
-              audioBitsPerSecond: Math.floor(320000 * (1 - settings.vbrQuality * 0.15)),
+              audioBitsPerSecond: 128000, // Standard audio quality
             });
 
-            // Handle data available
             recorder.ondataavailable = (event: BlobEvent) => {
+              console.log('[Page] Data available - chunk size:', event.data.size);
               if (event.data.size > 0) {
                 audioChunks.push(event.data);
               }
             };
 
-            // Handle recording stop
             recorder.onstop = () => {
-              console.log('[Page] Recording stopped, processing audio');
+              console.log('[Page] Recording stopped, processing audio chunks:', audioChunks.length);
               if (audioChunks.length > 0) {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
+                const audioBlob = new Blob(audioChunks, {
+                  type: 'audio/webm;codecs=opus',
+                });
+                console.log('[Page] Created audio blob of size:', audioBlob.size);
                 const audioUrl = URL.createObjectURL(audioBlob);
                 chrome.runtime.sendMessage({
                   type: 'RECORDING_STATUS',
                   status: 'inactive',
-                  message: 'Recording stopped',
                   audioUrl,
+                });
+              } else {
+                chrome.runtime.sendMessage({
+                  type: 'RECORDING_STATUS',
+                  status: 'inactive',
+                  message: 'No audio data recorded',
                 });
               }
               window.__cleanupRecording?.();
               resolve(null);
             };
 
-            // Function to start recording
             const startRecording = () => {
               if (recorder.state === 'recording') return;
               console.log('[Page] Starting media recorder');
-              recorder.start(100);
-              isAudioDetected = true;
-              chrome.runtime.sendMessage({
-                type: 'RECORDING_STATUS',
-                status: 'recording',
-                message: 'Recording in progress...',
-              });
+              recorder.start(1000);
+              chrome.runtime.sendMessage(
+                {
+                  type: 'RECORDING_STATUS',
+                  status: 'recording',
+                  message: 'Recording in progress...',
+                },
+                response => {
+                  console.log('[Page] Status update response:', response);
+                }
+              );
             };
 
-            // Function to create audio stream
             const createPassiveStream = (element: HTMLMediaElement) => {
               if (!window.__audioContext || !window.__recordingDestination) return;
 
               try {
-                // @ts-expect-error - captureStream is supported in modern browsers
-                const stream = element.captureStream();
-                const audioTracks = stream.getAudioTracks();
+                // Check if we already have a source for this element
+                let source = window.__audioSources.get(element);
 
-                if (audioTracks.length > 0) {
-                  console.log('[Page] Audio tracks found');
-                  const mediaStream = new MediaStream([audioTracks[0]]);
-                  const source = window.__audioContext.createMediaStreamSource(mediaStream);
-                  source.connect(window.__recordingDestination);
-                  audioSources.push(source);
+                if (!source) {
+                  // Create new source only if one doesn't exist
+                  source = window.__audioContext.createMediaElementSource(element);
+                  window.__audioSources.set(element, source);
 
-                  if (!element.paused && !element.ended && element.currentTime > 0) {
-                    console.log('[Page] Audio is already playing, starting recording');
+                  // Connect source to destination for normal playback
+                  source.connect(window.__audioContext.destination);
+                }
+
+                // Create a gain node for the recording branch
+                const recordingGain = window.__audioContext.createGain();
+                recordingGain.gain.value = 1.0;
+
+                // Connect to recording destination
+                source.connect(recordingGain);
+                recordingGain.connect(window.__recordingDestination);
+
+                console.log('[Page] Audio routing established');
+
+                if (!element.paused && !element.ended && element.currentTime > 0) {
+                  console.log('[Page] Audio is already playing, starting recording');
+                  startRecording();
+                }
+
+                const playHandler = () => {
+                  console.log('[Page] Audio started playing');
+                  if (recorder.state !== 'recording') {
                     startRecording();
                   }
+                };
 
-                  element.addEventListener('play', () => {
-                    console.log('[Page] Audio started playing');
-                    if (!isAudioDetected) {
-                      startRecording();
-                    }
-                  });
-                }
+                element.removeEventListener('play', playHandler);
+                element.addEventListener('play', playHandler);
+                element.removeEventListener('playing', playHandler);
+                element.addEventListener('playing', playHandler);
               } catch (e) {
                 console.warn('[Page] Error creating passive stream:', e);
+                chrome.runtime.sendMessage({
+                  type: 'RECORDING_STATUS',
+                  status: 'inactive',
+                  message: 'Failed to create audio stream',
+                });
               }
             };
 
-            // Set up cleanup
             window.__cleanupRecording = () => {
-              audioSources.forEach(source => {
-                try {
-                  source.disconnect();
-                } catch (e) {
-                  console.warn('[Page] Error disconnecting source:', e);
+              try {
+                if (window.__recordingDestination) {
+                  window.__recordingDestination.disconnect();
+                  delete window.__recordingDestination;
                 }
-              });
-              if (window.__recordingDestination) {
-                window.__recordingDestination.disconnect();
-                delete window.__recordingDestination;
-              }
-              if (window.__mediaRecorder) {
-                delete window.__mediaRecorder;
+                if (window.__mediaRecorder) {
+                  delete window.__mediaRecorder;
+                }
+                // Don't close the AudioContext or remove sources as they might be needed for playback
+              } catch (e) {
+                console.warn('[Page] Error during cleanup:', e);
               }
             };
 
-            // Store recorder reference
             window.__mediaRecorder = recorder;
 
-            // Connect existing media elements
             const mediaElements = [
               ...Array.from(document.getElementsByTagName('audio')),
               ...Array.from(document.getElementsByTagName('video')),
             ];
 
-            mediaElements.forEach(createPassiveStream);
+            console.log('[Page] Found media elements:', mediaElements.length);
 
-            if (!isAudioDetected) {
-              console.log('[Page] No media playing, waiting for audio');
+            if (mediaElements.length === 0) {
+              console.log('[Page] No media elements found, waiting for audio...');
               chrome.runtime.sendMessage({
                 type: 'RECORDING_STATUS',
                 status: 'waiting',
-                message: 'Waiting for audio input...',
+                message: 'Waiting for audio elements...',
               });
+            } else {
+              mediaElements.forEach(createPassiveStream);
             }
+
+            const processedElements = new Set();
+
+            const checkForNewMediaElements = setInterval(() => {
+              const currentElements = [
+                ...Array.from(document.getElementsByTagName('audio')),
+                ...Array.from(document.getElementsByTagName('video')),
+              ];
+              currentElements.forEach(element => {
+                if (!processedElements.has(element)) {
+                  processedElements.add(element);
+                  createPassiveStream(element);
+                }
+              });
+            }, 1000);
+
+            recorder.addEventListener('stop', () => {
+              clearInterval(checkForNewMediaElements);
+            });
           } catch (error) {
             console.error('[Page] Recording setup error:', error);
             chrome.runtime.sendMessage({
@@ -226,6 +293,71 @@ export const captureAudio = async (
     return result[0]?.result || null;
   } catch (error) {
     console.error('[Extension] Error in captureAudio:', error);
+    sendStatusUpdate('inactive', 'Recording failed');
     return null;
   }
 };
+
+export async function startRecording(stream: MediaStream, onDataAvailable: (data: Blob) => void) {
+  const mediaRecorder = new MediaRecorder(stream);
+
+  // Add state change listener to track recording status
+  mediaRecorder.addEventListener('start', () => {
+    // Update recording status when actual recording begins
+    recordingStore.setStatus('recording');
+  });
+
+  mediaRecorder.addEventListener('dataavailable', event => {
+    if (event.data.size > 0) {
+      onDataAvailable(event.data);
+    }
+  });
+
+  // Start recording
+  mediaRecorder.start();
+
+  return mediaRecorder;
+}
+
+export async function initializeAudioCapture(tabId: number) {
+  try {
+    const stream = await chrome.tabCapture.capture({
+      audio: true,
+      video: false,
+      tabId: tabId,
+    });
+
+    if (!stream) {
+      throw new Error('Failed to capture tab audio');
+    }
+
+    // Add an AudioContext to monitor audio levels
+    const audioContext = new AudioContext();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyzer = audioContext.createAnalyser();
+    source.connect(analyzer);
+
+    // Monitor audio levels to detect when audio actually starts
+    const checkAudioLevel = () => {
+      const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+      analyzer.getByteFrequencyData(dataArray);
+
+      // Check if there's any significant audio
+      const hasAudio = dataArray.some(value => value > 0);
+
+      if (hasAudio && recordingStore.status === 'waiting_for_audio') {
+        recordingStore.setStatus('recording');
+      }
+
+      if (recordingStore.status === 'recording' || recordingStore.status === 'waiting_for_audio') {
+        requestAnimationFrame(checkAudioLevel);
+      }
+    };
+
+    requestAnimationFrame(checkAudioLevel);
+    return stream;
+  } catch (error) {
+    console.error('Error capturing audio:', error);
+    throw error;
+  }
+}

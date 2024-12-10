@@ -92,42 +92,59 @@ const SidePanel = () => {
     setElapsedTime(0);
   }, []);
 
-  // Set up message listener
+  // Set up message listener for status updates
   useEffect(() => {
-    const messageListener = (message: {
-      type: string;
-      status: RecordingStatus;
-      message?: string;
-      audioUrl?: string;
-    }) => {
-      if (message.type === 'RECORDING_STATUS') {
-        console.log('[UI] Received status update:', message);
+    const messageListener = (
+      message: {
+        type: string;
+        status: RecordingStatus;
+        message?: string;
+        audioUrl?: string;
+      },
+      sender: chrome.runtime.MessageSender,
+      sendResponse: (response: any) => void
+    ) => {
+      console.log('[UI] Received message:', message);
 
+      if (message.type === 'RECORDING_STATUS') {
+        console.log('[UI] Received status update:', message.status);
+
+        // Update status
+        setStatus(message.status);
+
+        // Handle specific status cases
         switch (message.status) {
           case 'recording':
-            console.log('[UI] Setting recording status');
-            setStatus('recording');
-            break;
-          case 'waiting':
-            console.log('[UI] Setting waiting status');
-            setStatus('waiting');
+            console.log('[UI] Recording started');
+            setError(null);
             break;
           case 'inactive':
-            console.log('[UI] Setting inactive status');
             if (message.audioUrl) {
-              console.log('[UI] Received audio URL:', message.audioUrl);
+              console.log('[UI] Recording completed, saving URL:', message.audioUrl);
               setRecordings(prev => [...prev, { url: message.audioUrl!, timestamp: Date.now() }]);
             }
             if (message.message) {
               setError(message.message);
             }
-            setStatus('inactive');
+            break;
+          case 'waiting':
+            console.log('[UI] Waiting for audio');
+            setError(message.message || null);
             break;
         }
+
+        // Send response to acknowledge receipt
+        sendResponse({ received: true });
       }
+
+      // Return true to indicate we'll send response asynchronously
+      return true;
     };
 
+    // Listen for messages from both the content script and the background script
     chrome.runtime.onMessage.addListener(messageListener);
+
+    // Cleanup
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
     };
@@ -283,12 +300,11 @@ const SidePanel = () => {
           <div className="flex gap-2">
             <button
               onClick={handleCaptureAudio}
-              disabled={status === 'waiting'}
               className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow transition-all ${
                 status === 'recording'
                   ? 'bg-red-500 text-white hover:bg-red-600'
                   : status === 'waiting'
-                    ? 'cursor-not-allowed bg-gray-400 text-white'
+                    ? 'bg-yellow-500 text-white hover:bg-yellow-600'
                     : 'bg-purple-500 text-white hover:bg-purple-600'
               }`}
             >
