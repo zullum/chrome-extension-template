@@ -1,12 +1,12 @@
 import '@src/SidePanel.css';
 import { useStorage, withErrorBoundary, withSuspense } from '@extension/shared';
 import { exampleThemeStorage } from '@extension/storage';
-import { Download, Moon, Play, Settings, Sun, Square } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Download, Moon, Play, Settings, Sun, Square, Mic, Loader } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
 import { captureAudio } from './tools/captureAudio';
+import type { RecordingStatus } from './types';
 
-// Remove or comment out this line as it's causing the issue
-// exampleThemeStorage.set('dark');
+type QualityPreset = keyof typeof QUALITY_PRESETS;
 
 const QUALITY_PRESETS = {
   low: {
@@ -29,9 +29,44 @@ const QUALITY_PRESETS = {
   },
 } as const;
 
-type QualityPreset = keyof typeof QUALITY_PRESETS;
+const StatusIndicator = ({ status }: { status: RecordingStatus }) => {
+  const getStatusDetails = () => {
+    switch (status) {
+      case 'recording':
+        return {
+          icon: <Mic className="size-4 animate-pulse text-red-500" />,
+          text: 'Recording in progress',
+          className: 'text-red-500',
+        };
+      case 'waiting':
+        return {
+          icon: <Loader className="size-4 animate-spin text-yellow-500" />,
+          text: 'Waiting for audio',
+          className: 'text-yellow-500',
+        };
+      default:
+        return {
+          icon: <Mic className="size-4 text-gray-500" />,
+          text: 'Ready to record',
+          className: 'text-gray-500',
+        };
+    }
+  };
+
+  const details = getStatusDetails();
+
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-full bg-opacity-10 px-3 py-1 ${details.className}`}
+    >
+      {details.icon}
+      <span className="text-sm font-medium">{details.text}</span>
+    </div>
+  );
+};
 
 const SidePanel = () => {
+  // Theme state
   useEffect(() => {
     const currentTheme = exampleThemeStorage.get();
     if (!currentTheme) {
@@ -41,22 +76,75 @@ const SidePanel = () => {
 
   const theme = useStorage(exampleThemeStorage);
   const isLight = theme === 'light';
+
+  // Recording state
+  const [status, setStatus] = useState<RecordingStatus>('inactive');
   const [error, setError] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
+  const [recordings, setRecordings] = useState<Array<{ url: string; timestamp: number }>>([]);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityPreset>('high');
 
+  // Reset recording state
+  const resetRecording = useCallback(() => {
+    setStatus('inactive');
+    setError(null);
+    setElapsedTime(0);
+  }, []);
+
+  // Set up message listener
+  useEffect(() => {
+    const messageListener = (message: {
+      type: string;
+      status: RecordingStatus;
+      message?: string;
+      audioUrl?: string;
+    }) => {
+      if (message.type === 'RECORDING_STATUS') {
+        console.log('[UI] Received status update:', message);
+
+        switch (message.status) {
+          case 'recording':
+            console.log('[UI] Setting recording status');
+            setStatus('recording');
+            break;
+          case 'waiting':
+            console.log('[UI] Setting waiting status');
+            setStatus('waiting');
+            break;
+          case 'inactive':
+            console.log('[UI] Setting inactive status');
+            if (message.audioUrl) {
+              console.log('[UI] Received audio URL:', message.audioUrl);
+              setRecordings(prev => [...prev, { url: message.audioUrl!, timestamp: Date.now() }]);
+            }
+            if (message.message) {
+              setError(message.message);
+            }
+            setStatus('inactive');
+            break;
+        }
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(messageListener);
+    return () => {
+      chrome.runtime.onMessage.removeListener(messageListener);
+    };
+  }, []);
+
+  // Timer effect
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
 
-    if (isCapturing) {
+    if (status === 'recording') {
       const startTime = Date.now();
       interval = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        setElapsedTime(elapsed);
+        setElapsedTime(Date.now() - startTime);
       }, 100);
+      console.log('[UI] Started recording timer');
+    } else {
+      setElapsedTime(0);
     }
 
     return () => {
@@ -64,59 +152,61 @@ const SidePanel = () => {
         clearInterval(interval);
       }
     };
-  }, [isCapturing]);
+  }, [status]);
 
   const handleCaptureAudio = async () => {
+    console.log('[UI] handleCaptureAudio called, current status:', status);
+
     try {
-      if (isCapturing) {
-        await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, true);
-        setIsCapturing(false);
-        setElapsedTime(0);
+      // Handle stop recording
+      if (status === 'recording') {
+        console.log('[UI] Stopping recording');
+        try {
+          await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, true);
+        } catch (err) {
+          console.error('[UI] Error stopping recording:', err);
+          setError('Failed to stop recording');
+          resetRecording();
+        }
         return;
       }
 
+      // Start new recording
+      console.log('[UI] Starting new recording');
       setError(null);
-      setElapsedTime(0);
-      setIsCapturing(true);
+      setStatus('waiting');
 
-      const url = await captureAudio(0, QUALITY_PRESETS[selectedQuality], url => {
-        if (url) {
-          setAudioUrl(url);
-        }
-        setIsCapturing(false);
-        setElapsedTime(0);
-      });
-
-      if (url) {
-        setAudioUrl(url);
-      } else {
-        setError('No audio playing found on this page');
-        setIsCapturing(false);
+      try {
+        await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, false);
+      } catch (err) {
+        console.error('[UI] Error starting recording:', err);
+        setError('Failed to start recording');
+        resetRecording();
       }
     } catch (err) {
+      console.error('[UI] Error in handleCaptureAudio:', err);
       setError('Failed to capture audio');
-      console.error(err);
-      setIsCapturing(false);
-      setElapsedTime(0);
+      resetRecording();
     }
   };
 
-  const handleDownload = () => {
-    if (!audioUrl) return;
-
+  const handleDownload = (url: string, index: number) => {
     const a = document.createElement('a');
-    a.href = audioUrl;
-    const extension = audioUrl.includes('audio/wav')
+    a.href = url;
+    const extension = url.includes('audio/wav')
       ? 'wav'
-      : audioUrl.includes('audio/mp3') || audioUrl.includes('audio/mpeg')
+      : url.includes('audio/mp3') || url.includes('audio/mpeg')
         ? 'mp3'
-        : audioUrl.includes('audio/aac')
+        : url.includes('audio/aac')
           ? 'm4a'
           : 'webm';
 
     const quality = selectedQuality.toUpperCase();
-    const duration = Math.round(elapsedTime / 1000);
-    a.download = `captured-audio-${duration}s-${quality}.${extension}`;
+    const timestamp = new Date(recordings[index].timestamp)
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[^0-9]/g, '-');
+    a.download = `recording-${timestamp}-${quality}.${extension}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -152,6 +242,9 @@ const SidePanel = () => {
       </button>
 
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
+        {/* Status Indicator */}
+        <StatusIndicator status={status} />
+
         {showSettings && (
           <div
             className={`w-full max-w-md rounded-lg border p-4 ${
@@ -190,14 +283,24 @@ const SidePanel = () => {
           <div className="flex gap-2">
             <button
               onClick={handleCaptureAudio}
-              className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow hover:scale-105 ${
-                isLight ? 'bg-purple-500 text-white' : 'bg-purple-400 text-white'
+              disabled={status === 'waiting'}
+              className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow transition-all ${
+                status === 'recording'
+                  ? 'bg-red-500 text-white hover:bg-red-600'
+                  : status === 'waiting'
+                    ? 'cursor-not-allowed bg-gray-400 text-white'
+                    : 'bg-purple-500 text-white hover:bg-purple-600'
               }`}
             >
-              {isCapturing ? (
+              {status === 'recording' ? (
                 <>
                   <Square className="size-4" />
                   Stop Recording ({formatTime(elapsedTime)})
+                </>
+              ) : status === 'waiting' ? (
+                <>
+                  <Loader className="size-4 animate-spin" />
+                  Waiting for audio...
                 </>
               ) : (
                 <>
@@ -208,20 +311,33 @@ const SidePanel = () => {
             </button>
           </div>
 
-          {audioUrl && (
-            <button
-              onClick={handleDownload}
-              className={`flex items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow hover:scale-105 ${
-                isLight ? 'bg-green-500 text-white' : 'bg-green-400 text-white'
-              }`}
-            >
-              <Download className="size-4" />
-              Download Audio ({selectedQuality.toUpperCase()})
-            </button>
+          {/* Recordings List */}
+          {recordings.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <h4 className={`text-sm font-medium ${isLight ? 'text-gray-900' : 'text-gray-100'}`}>
+                Recordings
+              </h4>
+              {recordings.map((recording, index) => (
+                <button
+                  key={recording.timestamp}
+                  onClick={() => handleDownload(recording.url, index)}
+                  className={`flex items-center justify-between gap-2 rounded px-4 py-2 text-sm shadow transition-all hover:scale-105 ${
+                    isLight
+                      ? 'bg-green-500 text-white hover:bg-green-600'
+                      : 'bg-green-400 text-white hover:bg-green-500'
+                  }`}
+                >
+                  <span>Recording {recordings.length - index}</span>
+                  <Download className="size-4" />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
-        {error && <div className={`mt-4 text-red-500`}>{error}</div>}
+        {error && (
+          <div className="mt-4 rounded-lg bg-red-100 px-4 py-2 text-sm text-red-600">{error}</div>
+        )}
       </div>
     </div>
   );
