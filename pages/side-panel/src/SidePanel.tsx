@@ -80,7 +80,13 @@ const SidePanel = () => {
   // Recording state
   const [status, setStatus] = useState<RecordingStatus>('inactive');
   const [error, setError] = useState<string | null>(null);
-  const [recordings, setRecordings] = useState<Array<{ url: string; timestamp: number }>>([]);
+  const [recordings, setRecordings] = useState<
+    Array<{
+      url: string;
+      timestamp: number;
+      duration: number;
+    }>
+  >([]);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityPreset>('high');
@@ -102,7 +108,7 @@ const SidePanel = () => {
         audioUrl?: string;
       },
       sender: chrome.runtime.MessageSender,
-      sendResponse: (response: any) => void
+      sendResponse: (response: { received: boolean }) => void
     ) => {
       console.log('[UI] Received message:', message);
 
@@ -121,7 +127,15 @@ const SidePanel = () => {
           case 'inactive':
             if (message.audioUrl) {
               console.log('[UI] Recording completed, saving URL:', message.audioUrl);
-              setRecordings(prev => [...prev, { url: message.audioUrl!, timestamp: Date.now() }]);
+              // Save recording with duration
+              setRecordings(prev => [
+                {
+                  url: message.audioUrl!,
+                  timestamp: Date.now(),
+                  duration: elapsedTime,
+                },
+                ...prev,
+              ]); // Add new recording at the start
             }
             if (message.message) {
               setError(message.message);
@@ -133,22 +147,17 @@ const SidePanel = () => {
             break;
         }
 
-        // Send response to acknowledge receipt
         sendResponse({ received: true });
       }
 
-      // Return true to indicate we'll send response asynchronously
       return true;
     };
 
-    // Listen for messages from both the content script and the background script
     chrome.runtime.onMessage.addListener(messageListener);
-
-    // Cleanup
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
     };
-  }, []);
+  }, [elapsedTime]);
 
   // Timer effect
   useEffect(() => {
@@ -207,6 +216,13 @@ const SidePanel = () => {
     }
   };
 
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
   const handleDownload = (url: string, index: number) => {
     const a = document.createElement('a');
     a.href = url;
@@ -223,17 +239,11 @@ const SidePanel = () => {
       .toISOString()
       .slice(0, 19)
       .replace(/[^0-9]/g, '-');
-    a.download = `recording-${timestamp}-${quality}.${extension}`;
+    const duration = formatDuration(recordings[index].duration);
+    a.download = `recording-${timestamp}-${duration}-${quality}.${extension}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  };
-
-  const formatTime = (ms: number): string => {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -311,7 +321,7 @@ const SidePanel = () => {
               {status === 'recording' ? (
                 <>
                   <Square className="size-4" />
-                  Stop Recording ({formatTime(elapsedTime)})
+                  Stop Recording ({formatDuration(elapsedTime)})
                 </>
               ) : status === 'waiting' ? (
                 <>
@@ -343,17 +353,20 @@ const SidePanel = () => {
                       : 'bg-green-400 text-white hover:bg-green-500'
                   }`}
                 >
-                  <span>Recording {recordings.length - index}</span>
+                  <span>
+                    Recording {index + 1} ({formatDuration(recording.duration)})
+                  </span>
                   <Download className="size-4" />
                 </button>
               ))}
             </div>
           )}
-        </div>
 
-        {error && (
-          <div className="mt-4 rounded-lg bg-red-100 px-4 py-2 text-sm text-red-600">{error}</div>
-        )}
+          {/* Only show error if it's a critical error, not status messages */}
+          {error && !error.includes('Waiting') && (
+            <div className="mt-4 rounded-lg bg-red-100 px-4 py-2 text-sm text-red-600">{error}</div>
+          )}
+        </div>
       </div>
     </div>
   );
