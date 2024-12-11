@@ -1,6 +1,6 @@
 import '@src/SidePanel.css';
 import { withErrorBoundary, withSuspense } from '@extension/shared';
-import { Download, Play, Settings, Square, Mic, Loader, X, Check } from 'lucide-react';
+import { Download, Play, Settings, Square, Mic, Loader, X, Check, Info } from 'lucide-react';
 import { useEffect, useState, useCallback } from 'react';
 import { captureAudio } from './tools/captureAudio';
 import type { RecordingStatus } from './types';
@@ -423,7 +423,28 @@ const SidePanel = () => {
 
             {recordings.length > 0 && (
               <div className="flex w-full flex-col gap-2">
-                <h4 className="text-sm font-medium">Recordings</h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-medium">Recordings</h4>
+                  <div className="group relative">
+                    <Info className="size-4 cursor-help text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" />
+                    <div className="absolute left-[-56px] top-6 z-50 hidden w-[280px] group-hover:block">
+                      <div className="ring-b-0 ring-r-0 absolute -top-2 left-[20%] size-4 rotate-45 bg-white ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700" />
+                      <div className="relative rounded-lg bg-white px-4 py-3 text-sm shadow-lg ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
+                        <p className="text-gray-600 dark:text-gray-300">
+                          <span className="mb-2 block font-medium text-gray-900 dark:text-white">
+                            Temporary Storage
+                          </span>
+                          Recordings are stored in your browser&apos;s temporary memory and will be
+                          lost when you close the extension.
+                          <br />
+                          <br />
+                          To keep your recordings, make sure to download them using the download
+                          button.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 {recordings.map((recording, index) => (
                   <button
                     key={recording.timestamp}
