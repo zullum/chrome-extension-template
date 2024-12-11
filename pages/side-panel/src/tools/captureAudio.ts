@@ -1,13 +1,6 @@
 import { recordingStore } from '../stores/recordingStore';
 import type { RecordingStatus } from '../types';
 
-// Add type declaration for messages
-type RecordingMessage = {
-  type: 'RECORDING_STATUS';
-  status: RecordingStatus;
-  message?: string;
-};
-
 // Add type declaration for the global function
 declare global {
   interface Window {
@@ -49,7 +42,6 @@ const sendStatusUpdate = (status: RecordingStatus, message?: string, audioUrl?: 
 export const captureAudio = async (
   durationMs: number,
   quality: AudioQualitySettings = DEFAULT_QUALITY,
-  onStop: ((url: string | null) => void) | null = null,
   isStopRequest: boolean = false
 ): Promise<string | null> => {
   try {
@@ -59,6 +51,21 @@ export const captureAudio = async (
     if (!activeTab?.id) {
       console.error('[Extension] No active tab found');
       sendStatusUpdate('inactive', 'No active tab found');
+      return null;
+    }
+
+    const url = activeTab.url;
+    if (
+      !url ||
+      url.startsWith('chrome://') ||
+      url.startsWith('edge://') ||
+      url.startsWith('about:') ||
+      url.startsWith('chrome-extension://') ||
+      url === 'chrome://newtab/' ||
+      url === 'about:blank'
+    ) {
+      console.error('[Extension] Cannot inject scripts into this type of page:', url);
+      sendStatusUpdate('inactive', 'Cannot record audio on this page');
       return null;
     }
 
@@ -72,18 +79,6 @@ export const captureAudio = async (
           }
         },
       });
-      return null;
-    }
-
-    const url = activeTab.url;
-    if (
-      !url ||
-      url.startsWith('chrome://') ||
-      url.startsWith('edge://') ||
-      url.startsWith('about:')
-    ) {
-      console.error('[Extension] Cannot inject scripts into this type of page:', url);
-      sendStatusUpdate('inactive', 'Cannot record audio on this page');
       return null;
     }
 
@@ -176,6 +171,9 @@ export const captureAudio = async (
 
               try {
                 // Check if we already have a source for this element
+                if (!window.__audioSources) {
+                  window.__audioSources = new WeakMap();
+                }
                 let source = window.__audioSources.get(element);
 
                 if (!source) {
@@ -317,47 +315,4 @@ export async function startRecording(stream: MediaStream, onDataAvailable: (data
   mediaRecorder.start();
 
   return mediaRecorder;
-}
-
-export async function initializeAudioCapture(tabId: number) {
-  try {
-    const stream = await chrome.tabCapture.capture({
-      audio: true,
-      video: false,
-      tabId: tabId,
-    });
-
-    if (!stream) {
-      throw new Error('Failed to capture tab audio');
-    }
-
-    // Add an AudioContext to monitor audio levels
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyzer = audioContext.createAnalyser();
-    source.connect(analyzer);
-
-    // Monitor audio levels to detect when audio actually starts
-    const checkAudioLevel = () => {
-      const dataArray = new Uint8Array(analyzer.frequencyBinCount);
-      analyzer.getByteFrequencyData(dataArray);
-
-      // Check if there's any significant audio
-      const hasAudio = dataArray.some(value => value > 0);
-
-      if (hasAudio && recordingStore.status === 'waiting_for_audio') {
-        recordingStore.setStatus('recording');
-      }
-
-      if (recordingStore.status === 'recording' || recordingStore.status === 'waiting_for_audio') {
-        requestAnimationFrame(checkAudioLevel);
-      }
-    };
-
-    requestAnimationFrame(checkAudioLevel);
-    return stream;
-  } catch (error) {
-    console.error('Error capturing audio:', error);
-    throw error;
-  }
 }

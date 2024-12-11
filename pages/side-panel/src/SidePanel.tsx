@@ -1,10 +1,11 @@
 import '@src/SidePanel.css';
-import { useStorage, withErrorBoundary, withSuspense } from '@extension/shared';
-import { exampleThemeStorage } from '@extension/storage';
-import { Download, Moon, Play, Settings, Sun, Square, Mic, Loader } from 'lucide-react';
+import { withErrorBoundary, withSuspense } from '@extension/shared';
+import { Download, Play, Settings, Square, Mic, Loader, X, Check } from 'lucide-react';
 import { useEffect, useState, useCallback } from 'react';
 import { captureAudio } from './tools/captureAudio';
 import type { RecordingStatus } from './types';
+import { ThemeProvider } from './theme/ThemeContext';
+import { ThemeToggle } from './theme/ThemeToggle';
 
 type QualityPreset = keyof typeof QUALITY_PRESETS;
 
@@ -57,7 +58,7 @@ const StatusIndicator = ({ status }: { status: RecordingStatus }) => {
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-full bg-opacity-10 px-3 py-1 ${details.className}`}
+      className={`flex items-center gap-2 rounded-full bg-black/10 px-3 py-1 ${details.className}`}
     >
       {details.icon}
       <span className="text-sm font-medium">{details.text}</span>
@@ -65,18 +66,102 @@ const StatusIndicator = ({ status }: { status: RecordingStatus }) => {
   );
 };
 
+const QualitySettings = ({
+  selectedQuality,
+  setSelectedQuality,
+  onClose,
+}: {
+  selectedQuality: QualityPreset;
+  setSelectedQuality: (quality: QualityPreset) => void;
+  onClose: () => void;
+}) => {
+  const getQualityDetails = (quality: QualityPreset) => {
+    const preset = QUALITY_PRESETS[quality];
+    return {
+      name: quality.charAt(0).toUpperCase() + quality.slice(1),
+      specs: `${preset.sampleRate / 1000}kHz · ${preset.bitDepth}-bit · ${preset.channels}ch · 128kbps`,
+      description:
+        quality === 'low'
+          ? 'Good for voice recordings'
+          : quality === 'medium'
+            ? 'Balanced quality for most uses'
+            : 'Best quality for music',
+    };
+  };
+
+  return (
+    <div className="relative w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-900">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-bold text-gray-900 dark:text-gray-100">Recording Quality</h3>
+        <button
+          onClick={onClose}
+          className="rounded-full p-1 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800"
+          title="Close settings"
+        >
+          <X className="size-4 text-gray-500" />
+        </button>
+      </div>
+      <div className="flex flex-col gap-3">
+        {Object.keys(QUALITY_PRESETS).map(quality => {
+          const details = getQualityDetails(quality as QualityPreset);
+          const isSelected = selectedQuality === quality;
+          return (
+            <button
+              key={quality}
+              onClick={() => setSelectedQuality(quality as QualityPreset)}
+              className={`group flex flex-col rounded-lg border p-3 text-left transition-all ${
+                isSelected
+                  ? 'border-indigo-500 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-500/10'
+                  : 'border-gray-200 hover:border-indigo-200 hover:bg-indigo-50/50 dark:border-gray-700 dark:hover:border-indigo-700 dark:hover:bg-indigo-500/5'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className={`flex size-5 items-center justify-center rounded-full border transition-colors ${
+                    isSelected
+                      ? 'border-indigo-500 bg-indigo-500 dark:border-indigo-400 dark:bg-indigo-400'
+                      : 'border-gray-300 group-hover:border-indigo-300 dark:border-gray-600 dark:group-hover:border-indigo-600'
+                  }`}
+                >
+                  {isSelected && <Check className="size-3 text-white" />}
+                </div>
+                <span
+                  className={`font-medium ${
+                    isSelected
+                      ? 'text-indigo-700 dark:text-indigo-300'
+                      : 'text-gray-900 dark:text-gray-100'
+                  }`}
+                >
+                  {details.name}
+                </span>
+              </div>
+              <span
+                className={`mt-2 text-xs font-medium ${
+                  isSelected
+                    ? 'text-indigo-600 dark:text-indigo-300'
+                    : 'text-gray-500 dark:text-gray-400'
+                }`}
+              >
+                {details.specs}
+              </span>
+              <span
+                className={`mt-1 text-xs ${
+                  isSelected
+                    ? 'text-indigo-500 dark:text-indigo-300'
+                    : 'text-gray-500 dark:text-gray-500'
+                }`}
+              >
+                {details.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const SidePanel = () => {
-  // Theme state
-  useEffect(() => {
-    const currentTheme = exampleThemeStorage.get();
-    if (!currentTheme) {
-      exampleThemeStorage.set('dark');
-    }
-  }, []);
-
-  const theme = useStorage(exampleThemeStorage);
-  const isLight = theme === 'light';
-
   // Recording state
   const [status, setStatus] = useState<RecordingStatus>('inactive');
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +182,88 @@ const SidePanel = () => {
     setError(null);
     setElapsedTime(0);
   }, []);
+
+  // Format duration helper
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
+  // Handle audio capture
+  const handleCaptureAudio = useCallback(async () => {
+    console.log('[UI] handleCaptureAudio called, current status:', status);
+
+    try {
+      // Handle stop recording
+      if (status === 'recording') {
+        console.log('[UI] Stopping recording');
+        try {
+          await captureAudio(0, QUALITY_PRESETS[selectedQuality], true);
+        } catch (err) {
+          console.error('[UI] Error stopping recording:', err);
+          setError('Failed to stop recording');
+          resetRecording();
+        }
+        return;
+      }
+
+      // Start new recording
+      console.log('[UI] Starting new recording');
+      setError(null);
+      setStatus('waiting');
+
+      try {
+        await captureAudio(0, QUALITY_PRESETS[selectedQuality], false);
+      } catch (err) {
+        console.error('[UI] Error starting recording:', err);
+        setError('Failed to start recording');
+        resetRecording();
+      }
+    } catch (err) {
+      console.error('[UI] Error in handleCaptureAudio:', err);
+      setError('Failed to capture audio');
+      resetRecording();
+    }
+  }, [status, selectedQuality, resetRecording]);
+
+  // Handle cancel recording
+  const handleCancelRecording = useCallback(async () => {
+    try {
+      console.log('[UI] Canceling recording');
+      await captureAudio(0, QUALITY_PRESETS[selectedQuality], true);
+      resetRecording();
+    } catch (err) {
+      console.error('[UI] Error canceling recording:', err);
+      setError('Failed to cancel recording');
+      resetRecording();
+    }
+  }, [selectedQuality, resetRecording]);
+
+  // Handle download recording
+  const handleDownload = (url: string, index: number) => {
+    const a = document.createElement('a');
+    a.href = url;
+    const extension = url.includes('audio/wav')
+      ? 'wav'
+      : url.includes('audio/mp3') || url.includes('audio/mpeg')
+        ? 'mp3'
+        : url.includes('audio/aac')
+          ? 'm4a'
+          : 'webm';
+
+    const quality = selectedQuality.toUpperCase();
+    const timestamp = new Date(recordings[index].timestamp)
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[^0-9]/g, '-');
+    const duration = formatDuration(recordings[index].duration);
+    a.download = `recording-${timestamp}-${duration}-${quality}.${extension}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
   // Set up message listener for status updates
   useEffect(() => {
@@ -180,199 +347,105 @@ const SidePanel = () => {
     };
   }, [status]);
 
-  const handleCaptureAudio = async () => {
-    console.log('[UI] handleCaptureAudio called, current status:', status);
-
-    try {
-      // Handle stop recording
-      if (status === 'recording') {
-        console.log('[UI] Stopping recording');
-        try {
-          await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, true);
-        } catch (err) {
-          console.error('[UI] Error stopping recording:', err);
-          setError('Failed to stop recording');
-          resetRecording();
-        }
-        return;
-      }
-
-      // Start new recording
-      console.log('[UI] Starting new recording');
-      setError(null);
-      setStatus('waiting');
-
-      try {
-        await captureAudio(0, QUALITY_PRESETS[selectedQuality], null, false);
-      } catch (err) {
-        console.error('[UI] Error starting recording:', err);
-        setError('Failed to start recording');
-        resetRecording();
-      }
-    } catch (err) {
-      console.error('[UI] Error in handleCaptureAudio:', err);
-      setError('Failed to capture audio');
-      resetRecording();
-    }
-  };
-
-  const formatDuration = (ms: number): string => {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-  };
-
-  const handleDownload = (url: string, index: number) => {
-    const a = document.createElement('a');
-    a.href = url;
-    const extension = url.includes('audio/wav')
-      ? 'wav'
-      : url.includes('audio/mp3') || url.includes('audio/mpeg')
-        ? 'mp3'
-        : url.includes('audio/aac')
-          ? 'm4a'
-          : 'webm';
-
-    const quality = selectedQuality.toUpperCase();
-    const timestamp = new Date(recordings[index].timestamp)
-      .toISOString()
-      .slice(0, 19)
-      .replace(/[^0-9]/g, '-');
-    const duration = formatDuration(recordings[index].duration);
-    a.download = `recording-${timestamp}-${duration}-${quality}.${extension}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
   return (
-    <div className={`App ${isLight ? 'bg-slate-50' : 'bg-gray-800'}`}>
-      <button
-        onClick={exampleThemeStorage.toggle}
-        className="absolute right-4 top-4 rounded-full p-2 transition-colors hover:bg-gray-500/10"
-        title={isLight ? 'Switch to dark mode' : 'Switch to light mode'}
-      >
-        {isLight ? (
-          <Moon className="size-5 text-gray-800" />
-        ) : (
-          <Sun className="size-5 text-gray-200" />
-        )}
-      </button>
-
-      <button
-        onClick={() => setShowSettings(!showSettings)}
-        className="absolute right-16 top-4 rounded-full p-2 transition-colors hover:bg-gray-500/10"
-        title="Quality Settings"
-      >
-        <Settings className={`size-5 ${isLight ? 'text-gray-800' : 'text-gray-200'}`} />
-      </button>
-
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
-        {/* Status Indicator */}
-        <StatusIndicator status={status} />
-
-        {showSettings && (
-          <div
-            className={`w-full max-w-md rounded-lg border p-4 ${
-              isLight ? 'border-gray-200 bg-white' : 'border-gray-700 bg-gray-900'
-            }`}
-          >
-            <h3 className={`mb-3 font-bold ${isLight ? 'text-gray-900' : 'text-gray-100'}`}>
-              Quality Settings
-            </h3>
-            <div className="flex flex-col gap-2">
-              <label
-                htmlFor="quality-preset"
-                className={`text-sm ${isLight ? 'text-gray-600' : 'text-gray-400'}`}
-              >
-                Quality Preset
-              </label>
-              <select
-                id="quality-preset"
-                value={selectedQuality}
-                onChange={e => setSelectedQuality(e.target.value as QualityPreset)}
-                className={`rounded border px-3 py-2 ${
-                  isLight
-                    ? 'border-gray-300 bg-white text-gray-900'
-                    : 'border-gray-600 bg-gray-800 text-gray-100'
-                }`}
-              >
-                <option value="low">Low (44.1kHz, 16-bit)</option>
-                <option value="medium">Medium (48kHz, 24-bit)</option>
-                <option value="high">High (96kHz, 32-bit)</option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        <div className="flex w-full max-w-md flex-col gap-4">
-          <div className="flex gap-2">
+    <ThemeProvider>
+      <div className="flex min-h-screen flex-col bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+        <header className="sticky top-0 z-10 px-4 py-3">
+          <div className="flex justify-end gap-2">
+            <ThemeToggle />
             <button
-              onClick={handleCaptureAudio}
-              className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow transition-all ${
-                status === 'recording'
-                  ? 'bg-red-500 text-white hover:bg-red-600'
-                  : status === 'waiting'
-                    ? 'bg-yellow-500 text-white hover:bg-yellow-600'
-                    : 'bg-purple-500 text-white hover:bg-purple-600'
-              }`}
+              onClick={() => setShowSettings(!showSettings)}
+              className="rounded-lg p-2 hover:bg-gray-100 dark:hover:bg-gray-800"
+              title="Settings"
             >
-              {status === 'recording' ? (
-                <>
-                  <Square className="size-4" />
-                  Stop Recording ({formatDuration(elapsedTime)})
-                </>
-              ) : status === 'waiting' ? (
-                <>
-                  <Loader className="size-4 animate-spin" />
-                  Waiting for audio...
-                </>
-              ) : (
-                <>
-                  <Play className="size-4" />
-                  Start Recording
-                </>
-              )}
+              <Settings className="size-5" />
             </button>
           </div>
+        </header>
 
-          {/* Recordings List */}
-          {recordings.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <h4 className={`text-sm font-medium ${isLight ? 'text-gray-900' : 'text-gray-100'}`}>
-                Recordings
-              </h4>
-              {recordings.map((recording, index) => (
+        <main className="flex flex-1 flex-col items-center justify-center p-4">
+          <div className="flex w-full max-w-md flex-col items-center gap-4">
+            {showSettings && (
+              <QualitySettings
+                selectedQuality={selectedQuality}
+                setSelectedQuality={setSelectedQuality}
+                onClose={() => setShowSettings(false)}
+              />
+            )}
+
+            <StatusIndicator status={status} />
+
+            {error && !error.includes('Waiting') && (
+              <div className="rounded-lg bg-red-500/10 px-4 py-2 text-sm text-red-500">
+                <p>{error}</p>
+              </div>
+            )}
+
+            <div className="flex w-full gap-2">
+              <button
+                onClick={handleCaptureAudio}
+                className={`flex flex-1 items-center justify-center gap-2 rounded px-6 py-2 font-bold shadow transition-all ${
+                  status === 'recording'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : status === 'waiting'
+                      ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                      : 'bg-purple-500 text-white hover:bg-purple-600'
+                }`}
+              >
+                {status === 'recording' ? (
+                  <>
+                    <Square className="size-4" />
+                    Stop Recording ({formatDuration(elapsedTime)})
+                  </>
+                ) : status === 'waiting' ? (
+                  <>
+                    <Loader className="size-4 animate-spin" />
+                    Starting Recording...
+                  </>
+                ) : (
+                  <>
+                    <Play className="size-4" />
+                    Start Recording
+                  </>
+                )}
+              </button>
+
+              {status === 'waiting' && (
                 <button
-                  key={recording.timestamp}
-                  onClick={() => handleDownload(recording.url, index)}
-                  className={`flex items-center justify-between gap-2 rounded px-4 py-2 text-sm shadow transition-all hover:scale-105 ${
-                    isLight
-                      ? 'bg-green-500 text-white hover:bg-green-600'
-                      : 'bg-green-400 text-white hover:bg-green-500'
-                  }`}
+                  onClick={handleCancelRecording}
+                  className="flex items-center justify-center rounded bg-yellow-500 px-3 text-white shadow transition-all hover:bg-yellow-600"
+                  title="Cancel Recording"
                 >
-                  <span>
-                    Recording {index + 1} ({formatDuration(recording.duration)})
-                  </span>
-                  <Download className="size-4" />
+                  <X className="size-4" />
                 </button>
-              ))}
+              )}
             </div>
-          )}
 
-          {/* Only show error if it's a critical error, not status messages */}
-          {error && !error.includes('Waiting') && (
-            <div className="mt-4 rounded-lg bg-red-100 px-4 py-2 text-sm text-red-600">{error}</div>
-          )}
-        </div>
+            {recordings.length > 0 && (
+              <div className="flex w-full flex-col gap-2">
+                <h4 className="text-sm font-medium">Recordings</h4>
+                {recordings.map((recording, index) => (
+                  <button
+                    key={recording.timestamp}
+                    onClick={() => handleDownload(recording.url, index)}
+                    className="flex items-center justify-between gap-2 rounded bg-green-500 px-4 py-2 text-sm text-white shadow transition-all hover:scale-105 hover:bg-green-600"
+                  >
+                    <span>
+                      Recording {index + 1} ({formatDuration(recording.duration)})
+                    </span>
+                    <Download className="size-4" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
       </div>
-    </div>
+    </ThemeProvider>
   );
 };
 
 export default withErrorBoundary(
-  withSuspense(SidePanel, <div> Loading ... </div>),
-  <div> Error Occur </div>
+  withSuspense(SidePanel, <div>Loading...</div>),
+  <div>SidePanel Error</div>
 );

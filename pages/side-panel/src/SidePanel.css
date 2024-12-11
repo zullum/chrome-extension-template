@@ -1,3 +1,4 @@
+/* Prevent system colors from affecting the UI */
 .App {
   position: absolute;
   top: 0;

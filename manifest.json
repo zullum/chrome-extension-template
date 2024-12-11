@@ -2,12 +2,12 @@
   "manifest_version": 3,
   "name": "Chrome Extension with React & Vite",
   "version": "0.0.1",
-  "permissions": ["sidePanel", "scripting", "storage", "tabs", "tabCapture", "activeTab"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["storage", "scripting", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "web_accessible_resources": [
     {
-      "resources": ["src/pages/content/*"],
-      "matches": ["<all_urls>"]
+      "resources": ["content.js"],
+      "matches": ["http://*/*", "https://*/*"]
     }
   ],
   "side_panel": {
@@ -22,7 +22,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["http://*/*", "https://*/*"],
       "js": ["src/pages/content/index.js"]
     }
   ]
