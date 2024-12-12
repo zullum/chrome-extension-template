@@ -6,6 +6,8 @@ import { captureAudio } from './tools/captureAudio';
 import type { RecordingStatus } from './types';
 import { ThemeProvider } from './theme/ThemeContext';
 import { ThemeToggle } from './theme/ThemeToggle';
+import AudioPlayer, { RHAP_UI } from 'react-h5-audio-player';
+import 'react-h5-audio-player/lib/styles.css';
 
 type QualityPreset = keyof typeof QUALITY_PRESETS;
 
@@ -161,6 +163,115 @@ const QualitySettings = ({
   );
 };
 
+const customPlayerStyles = `
+  .rhap_container {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    padding: 8px 0 !important;
+  }
+
+  .rhap_time {
+    color: rgb(109 40 217) !important;
+    font-weight: 500 !important;
+  }
+
+  .dark .rhap_time {
+    color: rgb(216 180 254) !important;
+  }
+
+  .rhap_main-controls-button {
+    color: rgb(147 51 234) !important;
+  }
+
+  .rhap_main-controls-button:hover {
+    color: rgb(126 34 206) !important;
+  }
+
+  .dark .rhap_main-controls-button {
+    color: rgb(192 132 252) !important;
+  }
+
+  .dark .rhap_main-controls-button:hover {
+    color: rgb(216 180 254) !important;
+  }
+
+  .rhap_progress-bar {
+    height: 8px !important;
+    background-color: rgb(243 232 255) !important;
+    border-radius: 9999px !important;
+  }
+
+  .dark .rhap_progress-bar {
+    background-color: rgb(88 28 135) !important;
+  }
+
+  .rhap_progress-filled {
+    background-color: rgb(147 51 234) !important;
+  }
+
+  .dark .rhap_progress-filled {
+    background-color: rgb(168 85 247) !important;
+  }
+
+  .rhap_progress-indicator {
+    width: 16px !important;
+    height: 16px !important;
+    top: -4px !important;
+    background-color: rgb(126 34 206) !important;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1) !important;
+  }
+
+  .dark .rhap_progress-indicator {
+    background-color: rgb(192 132 252) !important;
+  }
+
+  .rhap_volume-button {
+    color: rgb(147 51 234) !important;
+  }
+
+  .rhap_volume-button:hover {
+    color: rgb(126 34 206) !important;
+  }
+
+  .dark .rhap_volume-button {
+    color: rgb(192 132 252) !important;
+  }
+
+  .dark .rhap_volume-button:hover {
+    color: rgb(216 180 254) !important;
+  }
+
+  .rhap_volume-bar {
+    height: 4px !important;
+    background-color: rgb(243 232 255) !important;
+    border-radius: 9999px !important;
+  }
+
+  .dark .rhap_volume-bar {
+    background-color: rgb(88 28 135) !important;
+  }
+
+  .rhap_volume-indicator {
+    width: 12px !important;
+    height: 12px !important;
+    top: -4px !important;
+    background-color: rgb(126 34 206) !important;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1) !important;
+  }
+
+  .dark .rhap_volume-indicator {
+    background-color: rgb(192 132 252) !important;
+  }
+
+  .rhap_progress-section {
+    margin: 0 !important;
+  }
+
+  .rhap_controls-section {
+    padding: 0 5px 0 0 !important;
+  }
+`;
+
 const SidePanel = () => {
   // Recording state
   const [status, setStatus] = useState<RecordingStatus>('inactive');
@@ -170,11 +281,13 @@ const SidePanel = () => {
       url: string;
       timestamp: number;
       duration: number;
+      isPlaying: boolean;
     }>
   >([]);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState<QualityPreset>('high');
+  const [activePlayingIndex, setActivePlayingIndex] = useState<number | null>(null);
 
   // Reset recording state
   const resetRecording = useCallback(() => {
@@ -213,6 +326,8 @@ const SidePanel = () => {
       console.log('[UI] Starting new recording');
       setError(null);
       setStatus('waiting');
+      // Hide any active players when starting new recording
+      setActivePlayingIndex(null);
 
       try {
         await captureAudio(0, QUALITY_PRESETS[selectedQuality], false);
@@ -294,12 +409,15 @@ const SidePanel = () => {
           case 'inactive':
             if (message.audioUrl) {
               console.log('[UI] Recording completed, saving URL:', message.audioUrl);
+              // Hide any active players when saving new recording
+              setActivePlayingIndex(null);
               // Save recording with duration
               setRecordings(prev => [
                 {
                   url: message.audioUrl!,
                   timestamp: Date.now(),
                   duration: elapsedTime,
+                  isPlaying: false,
                 },
                 ...prev,
               ]); // Add new recording at the start
@@ -347,6 +465,32 @@ const SidePanel = () => {
     };
   }, [status]);
 
+  // Cleanup effect for unmounting
+  useEffect(() => {
+    return () => {
+      recordings.forEach(recording => {
+        const audio = new Audio(recording.url);
+        audio.pause();
+        audio.src = '';
+      });
+    };
+  }, [recordings]);
+
+  const handlePlayAudio = (index: number) => {
+    setActivePlayingIndex(activePlayingIndex === index ? null : index);
+  };
+
+  useEffect(() => {
+    // Add custom styles to the document
+    const styleSheet = document.createElement('style');
+    styleSheet.innerText = customPlayerStyles;
+    document.head.appendChild(styleSheet);
+
+    return () => {
+      document.head.removeChild(styleSheet);
+    };
+  }, []);
+
   return (
     <ThemeProvider>
       <div className="flex min-h-screen flex-col bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100">
@@ -363,7 +507,7 @@ const SidePanel = () => {
           </div>
         </header>
 
-        <main className="flex flex-1 flex-col items-center justify-center p-4">
+        <main className="-mt-16 flex flex-1 flex-col items-center justify-center p-4">
           <div className="flex w-full max-w-md flex-col items-center gap-4">
             {showSettings && (
               <QualitySettings
@@ -428,7 +572,7 @@ const SidePanel = () => {
                   <div className="group relative">
                     <Info className="size-4 cursor-help text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" />
                     <div className="absolute left-[-56px] top-6 z-50 hidden w-[280px] group-hover:block">
-                      <div className="ring-b-0 ring-r-0 absolute -top-2 left-[20%] size-4 rotate-45 bg-white ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700" />
+                      <div className="absolute -top-2 left-[20%] size-4 rotate-45 bg-white ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700" />
                       <div className="relative rounded-lg bg-white px-4 py-3 text-sm shadow-lg ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
                         <p className="text-gray-600 dark:text-gray-300">
                           <span className="mb-2 block font-medium text-gray-900 dark:text-white">
@@ -446,16 +590,43 @@ const SidePanel = () => {
                   </div>
                 </div>
                 {recordings.map((recording, index) => (
-                  <button
-                    key={recording.timestamp}
-                    onClick={() => handleDownload(recording.url, index)}
-                    className="flex items-center justify-between gap-2 rounded bg-green-500 px-4 py-2 text-sm text-white shadow transition-all hover:scale-105 hover:bg-green-600"
-                  >
-                    <span>
-                      Recording {index + 1} ({formatDuration(recording.duration)})
-                    </span>
-                    <Download className="size-4" />
-                  </button>
+                  <div key={recording.timestamp} className="flex w-full flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handlePlayAudio(index)}
+                        className="flex size-10 items-center justify-center rounded bg-purple-500 text-white shadow transition-all hover:bg-purple-600"
+                        title={activePlayingIndex === index ? 'Hide player' : 'Play recording'}
+                      >
+                        <Play className="size-4" />
+                      </button>
+                      <div className="flex h-10 flex-1 items-center justify-between rounded bg-green-500 px-4 text-sm text-white shadow">
+                        <span>
+                          Recording {index + 1} ({formatDuration(recording.duration)})
+                        </span>
+                        <button
+                          onClick={() => handleDownload(recording.url, index)}
+                          className="rounded bg-green-600 p-1 hover:bg-green-700"
+                          title="Download recording"
+                        >
+                          <Download className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {activePlayingIndex === index && (
+                      <AudioPlayer
+                        src={recording.url}
+                        autoPlay
+                        showJumpControls={false}
+                        layout="horizontal"
+                        customProgressBarSection={[
+                          RHAP_UI.CURRENT_TIME,
+                          RHAP_UI.PROGRESS_BAR,
+                          RHAP_UI.DURATION,
+                        ]}
+                        customControlsSection={[RHAP_UI.MAIN_CONTROLS, RHAP_UI.VOLUME_CONTROLS]}
+                      />
+                    )}
+                  </div>
                 ))}
               </div>
             )}
